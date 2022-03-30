@@ -1,0 +1,14 @@
+function visualInstruction( configs, outputs, condition, instructionEndTime )
+% Play instruction sound
+
+    if outputs.expressionToUse == 1 && condiyion == 3
+        presentImage( configs.w, configs.neutralFaceImage );
+        outputs.outputs.currentFeedback = 0;
+    end
+    
+    audiofile = sprintf( '%s/instruction_%d.wav', configs.SOUND_PATH, condition ); 
+    playSoundFromFile( audiofile, configs.pahandle ); % play instruction sound
+
+    waitTimeUntil( instructionEndTime );
+    
+end

@@ -1,0 +1,335 @@
+function output = neurofeedbackAuditory(framesPath, syncBoxEnabled, outputFilePath, outputFileName, eegEnabled)
+%
+% Runs the static image localizer
+%
+% Example usage:
+% neurofeedbackAuditory('../data/static-images/', 1, 'C:\protocol_teresa_sousa', 'AuditoryFeedbackPrt', 0)
+% 
+%  Inputs:
+%     framesPath (string) - path to the folder with static-expressions (default: '../data/static-images/')
+%     syncBoxEnabled (bool) - determines if the fMRI syncbox is connected or not
+%           (0 or 1)
+%     outputFilePath (string) - path to the folder to save protocols (default: '../data/protocols')
+%     outputFileName (string) - name of the protocol file (default: 'Auditory_feedback_protocol')
+%     eegEnabled (bool) - determines if the EEG box is connected or not (0
+%     or 1)
+%
+%   Outputs:
+%     N/A
+%
+% check src/utils/helpers/createPrtFile for example
+
+if nargin < 5
+    % Send trigger to EEG port
+    eegEnabled = 0;
+    
+    % TRIGGER decoding (trigger associated to each facial expression/image)
+    % ----------------------------------
+    %     1 - Neutral
+    %     2 - Happy
+    %     3 - Sad
+    %     4 - Alternated
+    %     6 - Beep
+    % ----------------------------------
+
+end
+
+if nargin < 4
+    % name of the protocol file
+    outputFileName = 'Auditory_feedback_protocol';
+end
+
+if nargin < 3
+    % change to path folder @ stimulus presentation PC
+    outputFilePath =  '../data/protocols';
+end
+
+if nargin < 2
+    syncBoxEnabled = 0;
+end
+
+if nargin < 1
+    framesPath = '../data/static-images/';
+end
+
+
+
+% =======================================
+%%  Configuration and presets
+% =======================================
+
+init; % get configs
+
+
+% ---------------------------------------
+% definition of variables
+% ---------------------------------------
+
+% global lastSample; % control variable for TBV client
+% global tbvClient; % interface with TBV server
+% global meanROIActivation; % data vector returned on-line by TBV
+% global baseline;
+% global feedback; % feedback control variables
+% global conditionsFeedback;
+% global conditionPerTR; % condition in each TR over time
+% global pahandle; % handle to psychophysics toolbox - sound card 
+% global freq;
+% global repetitions;
+% global movement;
+% global nextmovement;
+% global StartTimeStamp; %TimeStamp of experience starting timepoint
+% global currentTimeStamp;
+% global dispfb;
+% global waitUntil;
+% global StartBlockTime;
+
+%global on;
+
+
+% ---------------------------------------
+% Connection to TBV server
+% ---------------------------------------
+
+tbvNI = TBVNetworkInterface( TBVclient( TBV_IP, TBV_PORT ) );
+
+tr = 2000; % TR of the protocol in miliseconds
+
+conditionPerTR = [];
+% portEEG = 888; % PORT number
+portEEG = 57360; % PORT number
+
+% ---------------------------------------
+% definition of variables /  PROTOCOL
+% ---------------------------------------
+
+numRep = 4; % number of Repetitions
+numCond = 3; %number of condition 
+
+% generate a set of different RGB codes to design protocol
+colorsProtocol = round(jet(numCond+1) * 255); % generate a set of different RGB codes to design protocol
+
+% beep sound
+beepSignal = sin(1:.1:1000);
+
+% counter variable
+k = 1;
+
+% ---------------------------------------
+% duration of different tasks
+% ---------------------------------------
+
+% number of blocks
+numBlocks = numRep*(numCond)*2+1;
+
+% interstimuli interval in seconds
+preset.block_isi=20;
+preset.block_task=22;
+
+% intruction interval time in seconds
+preset.block_instr = 2;
+
+% avatar presentation time in seconds
+preset.block_avatar = 2;
+
+% duration of each block in miliseconds
+blockDur = preset.block_task*1000;
+
+% ---------------------------------------
+% Create random display of conditions
+% ---------------------------------------
+
+% initialization
+randBlockSeq = generateRandomVector(numCond, numRep, 1); 
+
+
+for i = 1:numel(randBlockSeq)
+    conditionPerTR = [conditionPerTR  ones(1,blockDur/tr) * randBlockSeq(i)];   
+end
+
+% ---------------------------------------
+% create protocol file BRUNO TODO
+% ---------------------------------------
+
+conditionsPRT = {   'AlwaysNeutral'     (numRep*(numCond)+1)    blockDur colorsProtocol(1,:);...
+                    'AlwaysHappy'       numRep                      blockDur colorsProtocol(2,:);...
+                    'AlwaysSad'         numRep                      blockDur colorsProtocol(3,:);...
+                    'Alternate'         numRep                      blockDur colorsProtocol(4,:)};
+
+% create new PRT file
+newPRTfile(pathToPRTfolder, numCond+1, conditionsPRT, randBlockSeq);
+
+% =======================================
+%%  Import/Load Frames
+% =======================================
+
+% load neutral image
+foldersFrames_temp = dir([pathToFrames '1_neutral/']);
+
+framePath_temp = fullfile([pathToFrames '1_neutral/'], foldersFrames_temp(4).name);
+frameData = imread(framePath_temp);
+
+% =======================================
+%%  stimuli presentation
+% =======================================
+
+% ---------------------------------------
+% Open connection with MRI scanner
+% ---------------------------------------
+
+if syncBoxEnabled
+    syncBoxHandle = openSyncBoxPort( SYNCBOX_PORT );
+end
+
+
+% ---------------------------------------
+% Open connection with TBV server
+% ---------------------------------------
+
+tbvNI.createConnection();
+
+% ---------------------------------------
+% Let's START!!!
+% ---------------------------------------
+
+
+% ---------------------------------------
+% Open audio channel
+% ---------------------------------------
+pahandle = prepareAudioCard();
+
+
+    
+    % ------------------
+    % open the screen
+    % ------------------
+    
+    screens=Screen('Screens');
+    screenNumber=max(screens);
+    
+    [w, wRect]=Screen('OpenWindow',screenNumber, 0, [100,100,800,600], 32, 2);
+    
+    % ------------------
+    % Wait for MRI software trigger to start stimulus presentation
+    % ------------------
+    
+    if syncBoxEnabled
+        % waits for trigger during 5 minutes (300/60)
+        [gotTrigger, logdata.triggerTimeStamp]=waitForTrigger(syncbox_handle,1,300);
+        
+        if gotTrigger
+            disp('Trigger OK! Starting stimulation...');
+            hideCursor;
+        else
+            disp('Absent trigger. Aborting...');
+            Screen('Close');
+            sca; return
+        end
+    else
+%          Screen('DrawText', w, 'Experiment is ready', 50,50,255);
+%          Screen('Flip', w);
+       % w=1; %just to debug without opening the psychtoolbox screen
+
+        KbWait;
+    end
+
+    
+    %% MARCO FIRST REVISION HERE
+%     stimStartTime = GetSecs;
+    
+   
+%     waitUntil = GetSecs + preset.block_instr;
+    StartTimeStamp = GetSecs; 
+%     tic
+    
+    % ------------------
+    % start of imagery task presentation (Avatar with neutral expression interleaved between other expressions)
+    % ------------------
+    while k<=numBlocks % block loop
+        
+        bl = ['block number - ' num2str(k)];
+        disp(bl)
+        
+        condition = randBlockSeq(k);
+        
+        startBlockTime = GetSecs;
+        
+        presentImage( w, frameData );
+
+
+        % ----------------------
+        % Give instruction and beep (trigger)
+        % ----------------------
+        
+        instruction(condition, beepSignal, SOUND_PATH, pahandle, startBlockTime + preset.block_instr);
+       
+%         instruction_time = GetSecs - StartBlockTime 
+
+        % flip black screen
+        presentImage (w,zeros(size(frameData)));
+       
+        % ------------------
+        % Send EEG trigger
+        % ------------------
+        if eegEnabled
+            sendTrigger(condition, portEEG);
+        end
+        
+        imagery (w, frameData, preset);
+        
+%         imagery_time = toc
+%         
+        blockDuration = ['Block ' num2str(k) ' duration: ' num2str(GetSecs - startBlockTime)];
+        disp (blockDuration)
+        
+        k = k+1;
+%         k = numBlocks; 
+        
+    end
+    
+% % %     waitUntil=GetSecs + (preset.block_isi);
+% % %     
+% % %     %audiofile = ['instruction_' int2str(1) '.wav']
+% % %     audiofile = ['instruction_' int2str(1) ' - Copy.wav']
+% % %     playSound(audiofile, repetitions, pahandle)
+% % %     
+% % %     while GetSecs < waitUntil % level 0 (fixation) duration AND break statement
+% % %         [keyisdown, secs, keycode] = KbCheck;
+% % %         key_esc=find(keycode);
+% % %         if keyisdown == 1 && key_esc==KbName('Esc')
+% % %             Screen('CloseAll');
+% % %             IOPort('CloseAll');
+% % %             ShowCursor;
+% % %             Priority(0);
+% % %             return
+% % %         end
+% % %     end    
+% % %     % block loop
+
+
+    stimStopTime = GetSecs - StartTimeStamp
+%     stimStopTime - stimStartTime
+    
+    
+    ShowCursor;
+    Screen('CloseAll');
+    IOPort('CloseAll');
+    
+    % Close the audio device:
+    PsychPortAudio('Close', pahandle);
+% catch e
+%     
+%     fprintf(' ERROR FOUND in function imageryAvatars_MRI - %s \n' , e.message)
+%     ShowCursor;
+%     Screen('CloseAll');
+%     IOPort('CloseAll');
+%     
+%     % Close the audio device:
+%      PsychPortAudio('Close', pahandle);
+% end
+
+output = meanROIActivation;
+% finalFeedback = feedback;
+
+clearvars -global lastSample tbvClient meanROIActivation baseline feedback conditionsFeedback 
+
+end
